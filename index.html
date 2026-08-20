@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bluey Backyard Adventure</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #8fd8ff 0%, #dff7ff 65%, #b5e6a9 100%);
+      overflow: hidden;
+    }
+
+    .frame {
+      width: min(100vw, 960px);
+      height: min(100vh, 540px);
+      position: relative;
+      border: 5px solid #2566a8;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 24px 50px rgba(28, 81, 140, 0.28);
+      background: #bfe9ff;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: absolute;
+      inset: 0 auto auto 0;
+      padding: 12px 16px;
+      color: #0f355c;
+      font-weight: 700;
+      text-shadow: 0 1px 0 rgba(255, 255, 255, 0.55);
+      pointer-events: none;
+    }
+
+    .hud p {
+      margin: 0 0 6px;
+    }
+
+    .hud small {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+  </style>
+</head>
+<body>
+  <main class="frame">
+    <canvas id="game" width="960" height="540" aria-label="Bluey platform game"></canvas>
+    <div class="hud">
+      <p id="status">Collect the balloons and reach home!</p>
+      <small>Move: ← → or A D · Jump: Space / ↑ / W</small>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const statusText = document.getElementById('status');
+
+    const world = {
+      width: 3200,
+      height: canvas.height,
+      gravity: 0.8,
+      finishX: 2950
+    };
+
+    const keys = {};
+    const player = {
+      x: 100,
+      y: 0,
+      width: 48,
+      height: 58,
+      vx: 0,
+      vy: 0,
+      speed: 5,
+      jumpPower: 16,
+      onGround: false,
+      balloons: 0,
+      lives: 3
+    };
+
+    const platforms = [
+      { x: 0, y: 470, width: world.width, height: 70, type: 'ground' },
+      { x: 220, y: 390, width: 160, height: 18 },
+      { x: 470, y: 330, width: 130, height: 18 },
+      { x: 700, y: 380, width: 160, height: 18 },
+      { x: 980, y: 320, width: 180, height: 18 },
+      { x: 1260, y: 270, width: 120, height: 18 },
+      { x: 1450, y: 360, width: 160, height: 18 },
+      { x: 1710, y: 305, width: 170, height: 18 },
+      { x: 1970, y: 245, width: 120, height: 18 },
+      { x: 2200, y: 350, width: 180, height: 18 },
+      { x: 2480, y: 300, width: 160, height: 18 },
+      { x: 2700, y: 390, width: 150, height: 18 }
+    ];
+
+    const balloons = [
+      { x: 285, y: 340, collected: false },
+      { x: 520, y: 280, collected: false },
+      { x: 760, y: 330, collected: false },
+      { x: 1050, y: 270, collected: false },
+      { x: 1320, y: 220, collected: false },
+      { x: 1525, y: 310, collected: false },
+      { x: 1770, y: 255, collected: false },
+      { x: 2030, y: 195, collected: false },
+      { x: 2290, y: 300, collected: false },
+      { x: 2550, y: 250, collected: false }
+    ];
+
+    const enemies = [
+      { x: 820, y: 438, width: 34, height: 32, minX: 735, maxX: 855, vx: 1.1 },
+      { x: 1600, y: 438, width: 34, height: 32, minX: 1490, maxX: 1630, vx: -1.3 },
+      { x: 2760, y: 358, width: 34, height: 32, minX: 2710, maxX: 2800, vx: 1.4 }
+    ];
+
+    let cameraX = 0;
+    let win = false;
+
+    function resetPlayer(fullReset = false) {
+      player.x = 100;
+      player.y = 220;
+      player.vx = 0;
+      player.vy = 0;
+      player.onGround = false;
+      if (fullReset) {
+        player.balloons = 0;
+        balloons.forEach((balloon) => {
+          balloon.collected = false;
+        });
+      }
+    }
+
+    function intersects(a, b) {
+      return a.x < b.x + b.width &&
+        a.x + a.width > b.x &&
+        a.y < b.y + b.height &&
+        a.y + a.height > b.y;
+    }
+
+    function updatePlayer() {
+      const movingLeft = keys.ArrowLeft || keys.a || keys.A;
+      const movingRight = keys.ArrowRight || keys.d || keys.D;
+      const jumping = keys.ArrowUp || keys.w || keys.W || keys[' '];
+
+      if (movingLeft === movingRight) {
+        player.vx *= 0.8;
+        if (Math.abs(player.vx) < 0.1) {
+          player.vx = 0;
+        }
+      } else if (movingLeft) {
+        player.vx = -player.speed;
+      } else if (movingRight) {
+        player.vx = player.speed;
+      }
+
+      if (jumping && player.onGround) {
+        player.vy = -player.jumpPower;
+        player.onGround = false;
+      }
+
+      player.vy += world.gravity;
+      player.x += player.vx;
+      player.y += player.vy;
+
+      player.x = Math.max(0, Math.min(world.width - player.width, player.x));
+      player.onGround = false;
+
+      for (const platform of platforms) {
+        const next = { ...player };
+        if (!intersects(next, platform)) {
+          continue;
+        }
+
+        const previousBottom = player.y + player.height - player.vy;
+        const previousTop = player.y - player.vy;
+        const previousRight = player.x + player.width - player.vx;
+        const previousLeft = player.x - player.vx;
+
+        if (previousBottom <= platform.y) {
+          player.y = platform.y - player.height;
+          player.vy = 0;
+          player.onGround = true;
+        } else if (previousTop >= platform.y + platform.height) {
+          player.y = platform.y + platform.height;
+          player.vy = 0;
+        } else if (previousRight <= platform.x + 5) {
+          player.x = platform.x - player.width;
+          player.vx = 0;
+        } else if (previousLeft >= platform.x + platform.width - 5) {
+          player.x = platform.x + platform.width;
+          player.vx = 0;
+        }
+      }
+
+      for (const balloon of balloons) {
+        if (!balloon.collected && intersects(player, { x: balloon.x - 12, y: balloon.y - 24, width: 24, height: 36 })) {
+          balloon.collected = true;
+          player.balloons += 1;
+        }
+      }
+
+      for (const enemy of enemies) {
+        if (intersects(player, enemy)) {
+          player.lives -= 1;
+          if (player.lives <= 0) {
+            player.lives = 3;
+            resetPlayer(true);
+            statusText.textContent = 'Bonk! Try again from the start.';
+          } else {
+            resetPlayer();
+            statusText.textContent = `Watch out for the garden grumps! Lives left: ${player.lives}`;
+          }
+          return;
+        }
+      }
+
+      if (player.y > world.height) {
+        player.lives = Math.max(1, player.lives - 1);
+        resetPlayer();
+        statusText.textContent = `Splash! Back to the path. Lives left: ${player.lives}`;
+      }
+
+      if (player.x + player.width >= world.finishX && player.balloons === balloons.length) {
+        win = true;
+        statusText.textContent = 'You made it home with every balloon!';
+      } else if (!win) {
+        statusText.textContent = `Balloons: ${player.balloons}/${balloons.length} · Lives: ${player.lives}`;
+      }
+
+      cameraX = Math.max(0, Math.min(world.width - canvas.width, player.x - canvas.width * 0.35));
+    }
+
+    function updateEnemies() {
+      enemies.forEach((enemy) => {
+        enemy.x += enemy.vx;
+        if (enemy.x <= enemy.minX || enemy.x + enemy.width >= enemy.maxX) {
+          enemy.vx *= -1;
+        }
+      });
+    }
+
+    function drawSky() {
+      ctx.fillStyle = '#8fd8ff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      const cloudXs = [120, 360, 620, 860];
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      cloudXs.forEach((baseX, index) => {
+        const shift = (cameraX * (0.15 + index * 0.03)) % (canvas.width + 140);
+        const x = (baseX - shift + canvas.width + 140) % (canvas.width + 140) - 70;
+        const y = 70 + index * 28;
+        [[0, 0, 40], [30, -12, 34], [58, 3, 28]].forEach(([dx, dy, r]) => {
+          ctx.beginPath();
+          ctx.arc(x + dx, y + dy, r, 0, Math.PI * 2);
+          ctx.fill();
+        });
+      });
+    }
+
+    function drawBackground() {
+      drawSky();
+
+      ctx.fillStyle = '#7fcf89';
+      for (let i = 0; i < 8; i += 1) {
+        const hillX = i * 180 - (cameraX * 0.35) % 180;
+        ctx.beginPath();
+        ctx.arc(hillX, 490, 170, Math.PI, 0);
+        ctx.fill();
+      }
+
+      ctx.fillStyle = '#56b870';
+      for (let i = 0; i < 7; i += 1) {
+        const hillX = i * 220 - (cameraX * 0.5) % 220;
+        ctx.beginPath();
+        ctx.arc(hillX + 110, 515, 150, Math.PI, 0);
+        ctx.fill();
+      }
+    }
+
+    function drawPlatforms() {
+      platforms.forEach((platform) => {
+        const x = platform.x - cameraX;
+        ctx.fillStyle = platform.type === 'ground' ? '#56b870' : '#e0b55c';
+        ctx.fillRect(x, platform.y, platform.width, platform.height);
+        ctx.fillStyle = platform.type === 'ground' ? '#76d88c' : '#f2d38f';
+        ctx.fillRect(x, platform.y, platform.width, 8);
+      });
+    }
+
+    function drawBalloons() {
+      balloons.forEach((balloon) => {
+        if (balloon.collected) {
+          return;
+        }
+        const x = balloon.x - cameraX;
+        ctx.strokeStyle = '#855c3b';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x, balloon.y);
+        ctx.lineTo(x - 2, balloon.y + 26);
+        ctx.stroke();
+        ctx.fillStyle = '#ff8bc8';
+        ctx.beginPath();
+        ctx.ellipse(x, balloon.y - 8, 14, 18, 0, 0, Math.PI * 2);
+        ctx.fill();
+      });
+    }
+
+    function drawEnemies() {
+      enemies.forEach((enemy) => {
+        const x = enemy.x - cameraX;
+        ctx.fillStyle = '#f49857';
+        ctx.fillRect(x, enemy.y, enemy.width, enemy.height);
+        ctx.fillStyle = '#5f3b20';
+        ctx.fillRect(x + 5, enemy.y + 8, 6, 6);
+        ctx.fillRect(x + 22, enemy.y + 8, 6, 6);
+        ctx.fillRect(x + 6, enemy.y + enemy.height, 7, 7);
+        ctx.fillRect(x + 21, enemy.y + enemy.height, 7, 7);
+      });
+    }
+
+    function drawFinish() {
+      const x = world.finishX - cameraX;
+      ctx.fillStyle = '#5b3f2a';
+      ctx.fillRect(x, 300, 12, 170);
+      ctx.fillStyle = '#ffe26d';
+      ctx.beginPath();
+      ctx.moveTo(x + 12, 300);
+      ctx.lineTo(x + 74, 326);
+      ctx.lineTo(x + 12, 352);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.fillStyle = '#f3b06d';
+      ctx.fillRect(x + 90, 350, 90, 120);
+      ctx.fillStyle = '#e28a43';
+      ctx.fillRect(x + 116, 390, 22, 80);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x + 102, 368, 22, 22);
+      ctx.fillRect(x + 146, 368, 22, 22);
+    }
+
+    function drawBluey() {
+      const x = player.x - cameraX;
+      const y = player.y;
+
+      ctx.fillStyle = '#2f71b8';
+      ctx.fillRect(x + 10, y + 12, 28, 34);
+      ctx.fillRect(x + 14, y + 46, 8, 12);
+      ctx.fillRect(x + 26, y + 46, 8, 12);
+
+      ctx.fillStyle = '#22578d';
+      ctx.fillRect(x + 5, y + 0, 38, 24);
+      ctx.fillRect(x + 2, y - 8, 12, 18);
+      ctx.fillRect(x + 34, y - 8, 12, 18);
+
+      ctx.fillStyle = '#8fd8ff';
+      ctx.fillRect(x + 15, y + 18, 18, 18);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(x + 12, y + 6, 7, 7);
+      ctx.fillRect(x + 28, y + 6, 7, 7);
+      ctx.fillStyle = '#1e2734';
+      ctx.fillRect(x + 15, y + 9, 3, 3);
+      ctx.fillRect(x + 31, y + 9, 3, 3);
+
+      ctx.fillStyle = '#18324d';
+      ctx.fillRect(x + 20, y + 16, 8, 5);
+      ctx.fillRect(x + 8, y + 18, 5, 18);
+      ctx.fillRect(x + 35, y + 18, 5, 18);
+    }
+
+    function drawWinOverlay() {
+      if (!win) {
+        return;
+      }
+      ctx.fillStyle = 'rgba(15, 53, 92, 0.68)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.font = 'bold 34px Arial';
+      ctx.fillText('Hooray!', canvas.width / 2, 220);
+      ctx.font = '24px Arial';
+      ctx.fillText('Bluey made it home with every balloon.', canvas.width / 2, 265);
+      ctx.font = '18px Arial';
+      ctx.fillText('Press R to play again.', canvas.width / 2, 305);
+    }
+
+    function draw() {
+      drawBackground();
+      drawPlatforms();
+      drawFinish();
+      drawBalloons();
+      drawEnemies();
+      drawBluey();
+      drawWinOverlay();
+    }
+
+    function loop() {
+      if (!win) {
+        updatePlayer();
+        updateEnemies();
+      }
+      draw();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('keydown', (event) => {
+      keys[event.key] = true;
+      if (event.key === 'r' || event.key === 'R') {
+        win = false;
+        player.lives = 3;
+        resetPlayer(true);
+      }
+      if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(event.key)) {
+        event.preventDefault();
+      }
+    });
+
+    window.addEventListener('keyup', (event) => {
+      keys[event.key] = false;
+    });
+
+    resetPlayer(true);
+    loop();
+  </script>
+</body>
+</html>
